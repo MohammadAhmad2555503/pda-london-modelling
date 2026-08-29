@@ -1,0 +1,740 @@
+---
+title: "CS5812 Predictive Data Analysis"
+author: "Mohammad Ahmad Author (STUDENT_ID)"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## 1. Libraries
+
+```{r}
+rm(list = ls())
+gc()
+
+library(ggplot2)
+library(rpart)
+```
+
+## 2. Load dataset
+
+```{r}
+df <- read.csv("final_london_modelling.csv", stringsAsFactors = FALSE)
+
+dim(df)
+names(df)
+head(df)
+```
+
+## 3. Initial checks
+
+```{r}
+str(df)
+summary(df)
+```
+
+## 4. Remove duplicate transaction IDs if present
+
+```{r}
+if ("transaction_id" %in% names(df)) {
+  before_rows <- nrow(df)
+  df <- df[!duplicated(df$transaction_id), ]
+  after_rows <- nrow(df)
+  
+  cat("Rows before duplicate removal:", before_rows, "\n")
+  cat("Rows after duplicate removal :", after_rows, "\n")
+  cat("Rows removed                 :", before_rows - after_rows, "\n")
+} else {
+  cat("transaction_id column not found. Duplicate transaction check skipped.\n")
+}
+```
+
+## 5. Drop unused columns
+
+```{r}
+drop_cols <- c(
+  "X",
+  "X.1",
+  "manhattan_station_km",
+  "dist_to_tube_km",
+  "n_exact_keys",
+  "locality",
+  "postcode",
+  "transaction_id",
+  "street_split_clean"
+)
+
+df <- df[, !(names(df) %in% drop_cols)]
+
+dim(df)
+names(df)
+```
+
+## 6. Create target variable
+
+```{r}
+df$price <- as.numeric(df$price)
+
+df <- df[!is.na(df$price) & df$price > 0, ]
+
+df$log_price <- log(df$price)
+
+summary(df$price)
+summary(df$log_price)
+```
+
+## 7. Date and time variables
+
+```{r}
+if ("date_of_transfer" %in% names(df)) {
+  df$date_of_transfer <- as.Date(df$date_of_transfer, format = "%d-%m-%Y")
+  
+  df$sale_year <- as.numeric(format(df$date_of_transfer, "%Y"))
+  df$sale_month <- as.numeric(format(df$date_of_transfer, "%m"))
+}
+
+cat("Sale year range :", min(df$sale_year, na.rm = TRUE), "to", max(df$sale_year, na.rm = TRUE), "\n")
+cat("Sale month range:", min(df$sale_month, na.rm = TRUE), "to", max(df$sale_month, na.rm = TRUE), "\n")
+
+if (max(df$sale_year, na.rm = TRUE) < 1900) {
+  stop("Date parsing error: sale_year is not a real year. Check date_of_transfer format.")
+}
+
+summary(df$sale_year)
+summary(df$sale_month)
+```
+
+## 8. Convert categorical variables
+
+```{r}
+factor_cols <- c(
+  "built_form",
+  "construction_age_band",
+  "floor_level",
+  "old_new",
+  "duration",
+  "district",
+  "epc_source",
+  "epc_timing_flag",
+  "property_type",
+  "station_zone"
+)
+
+for (col in factor_cols) {
+  if (col %in% names(df)) {
+    df[[col]] <- as.factor(df[[col]])
+  }
+}
+
+str(df)
+```
+
+## 9. Select modelling variables
+
+```{r}
+model_cols <- c(
+  "price",
+  "log_price",
+  "current_energy_efficiency",
+  "potential_energy_efficiency",
+  "built_form",
+  "total_floor_area",
+  "number_habitable_rooms",
+  "construction_age_band",
+  "floor_level",
+  "heating_cost_current",
+  "heating_cost_potential",
+  "hot_water_cost_current",
+  "hot_water_cost_potential",
+  "lighting_cost_current",
+  "old_new",
+  "duration",
+  "district",
+  "epc_source",
+  "epc_timing_flag",
+  "lat",
+  "long",
+  "straight_line_station_km",
+  "station_zone",
+  "property_type",
+  "sale_year",
+  "sale_month"
+)
+
+model_cols <- model_cols[model_cols %in% names(df)]
+
+df_model <- df[, model_cols]
+
+dim(df_model)
+names(df_model)
+```
+
+## 10. Missing-value summary
+
+```{r}
+missing_summary <- data.frame(
+  column = names(df_model),
+  missing_count = colSums(is.na(df_model)),
+  missing_percent = round(colSums(is.na(df_model)) / nrow(df_model) * 100, 2)
+)
+
+missing_summary <- missing_summary[order(-missing_summary$missing_count), ]
+
+missing_summary
+```
+
+## 11. Remove remaining missing rows
+
+```{r}
+before_rows <- nrow(df_model)
+
+df_model <- na.omit(df_model)
+
+after_rows <- nrow(df_model)
+
+cat("Rows before removing missing values:", before_rows, "\n")
+cat("Rows after removing missing values :", after_rows, "\n")
+cat("Rows removed                       :", before_rows - after_rows, "\n")
+```
+
+## 12. Output folders and plot theme
+
+```{r}
+dir.create("outputs", showWarnings = FALSE)
+dir.create("eda_plots", showWarnings = FALSE)
+
+theme_set(
+  theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      axis.title = element_text(face = "bold"),
+      panel.grid.minor = element_blank()
+    )
+)
+
+set.seed(42)
+sample_size <- min(10000, nrow(df_model))
+plot_sample <- df_model[sample(1:nrow(df_model), sample_size), ]
+```
+
+## 13. Exploratory Data Analysis
+
+### 13.1 Distribution of log price
+
+```{r}
+p1 <- ggplot(df_model, aes(x = log_price)) +
+  geom_histogram(bins = 50, fill = "#4C78A8", color = "white") +
+  labs(
+    title = "Distribution of log price",
+    x = "Log price",
+    y = "Count"
+  )
+
+p1
+ggsave("eda_plots/r_eda_log_price_distribution.png", p1, width = 8, height = 5, dpi = 300)
+```
+
+### 13.2 Distribution of raw price
+
+```{r}
+p2 <- ggplot(df_model, aes(x = price)) +
+  geom_histogram(bins = 50, fill = "#F58518", color = "white") +
+  labs(
+    title = "Distribution of price",
+    x = "Price",
+    y = "Count"
+  )
+
+p2
+ggsave("eda_plots/r_eda_price_distribution.png", p2, width = 8, height = 5, dpi = 300)
+```
+
+### 13.3 Property type and log price
+
+```{r}
+p3 <- ggplot(df_model, aes(x = property_type, y = log_price, fill = property_type)) +
+  geom_boxplot(show.legend = FALSE) +
+  labs(
+    title = "Log price by property type",
+    x = "Property type",
+    y = "Log price"
+  )
+
+p3
+ggsave("eda_plots/r_eda_property_type_boxplot.png", p3, width = 8, height = 5, dpi = 300)
+```
+
+### 13.4 District and log price
+
+```{r}
+district_counts <- sort(table(df_model$district), decreasing = TRUE)
+top_districts <- names(district_counts)[1:15]
+
+df_top_districts <- df_model[df_model$district %in% top_districts, ]
+
+p4 <- ggplot(df_top_districts, aes(x = district, y = log_price, fill = district)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_flip() +
+  labs(
+    title = "Log price by top districts",
+    x = "District",
+    y = "Log price"
+  )
+
+p4
+ggsave("eda_plots/r_eda_district_boxplot.png", p4, width = 8, height = 6, dpi = 300)
+```
+
+### 13.5 Floor area and log price
+
+```{r}
+p5 <- ggplot(plot_sample, aes(x = total_floor_area, y = log_price)) +
+  geom_point(alpha = 0.25, color = "#2E86AB") +
+  geom_smooth(method = "lm", se = FALSE, color = "#D62728") +
+  labs(
+    title = "Floor area and log price",
+    x = "Total floor area",
+    y = "Log price"
+  )
+
+p5
+ggsave("eda_plots/r_eda_floor_area_log_price.png", p5, width = 8, height = 5, dpi = 300)
+```
+
+### 13.6 Habitable rooms and log price
+
+```{r}
+p6 <- ggplot(plot_sample, aes(x = number_habitable_rooms, y = log_price)) +
+  geom_point(alpha = 0.25, color = "#1F9D8A") +
+  geom_smooth(method = "lm", se = FALSE, color = "#D62728") +
+  labs(
+    title = "Rooms and log price",
+    x = "Number of habitable rooms",
+    y = "Log price"
+  )
+
+p6
+ggsave("eda_plots/r_eda_rooms_log_price.png", p6, width = 8, height = 5, dpi = 300)
+```
+
+### 13.7 Straight-line station distance and log price
+
+```{r}
+p7 <- ggplot(plot_sample, aes(x = straight_line_station_km, y = log_price)) +
+  geom_point(alpha = 0.25, color = "#7A5195") +
+  geom_smooth(method = "lm", se = FALSE, color = "#D62728") +
+  labs(
+    title = "Station distance and log price",
+    x = "Straight-line distance to station (km)",
+    y = "Log price"
+  )
+
+p7
+ggsave("eda_plots/r_eda_station_distance_log_price.png", p7, width = 8, height = 5, dpi = 300)
+```
+
+### 13.8 Energy efficiency and log price
+
+```{r}
+p8 <- ggplot(plot_sample, aes(x = current_energy_efficiency, y = log_price)) +
+  geom_point(alpha = 0.25, color = "#E45756") +
+  geom_smooth(method = "lm", se = FALSE, color = "#2E2E2E") +
+  labs(
+    title = "Energy efficiency and log price",
+    x = "Current energy efficiency",
+    y = "Log price"
+  )
+
+p8
+ggsave("eda_plots/r_eda_energy_efficiency_log_price.png", p8, width = 8, height = 5, dpi = 300)
+```
+
+## 14. Correlation analysis
+
+```{r}
+numeric_cols <- c(
+  "price",
+  "log_price",
+  "current_energy_efficiency",
+  "potential_energy_efficiency",
+  "total_floor_area",
+  "number_habitable_rooms",
+  "heating_cost_current",
+  "heating_cost_potential",
+  "hot_water_cost_current",
+  "hot_water_cost_potential",
+  "lighting_cost_current",
+  "lat",
+  "long",
+  "straight_line_station_km"
+  "sale_year",
+  "sale_month"
+)
+
+numeric_cols <- numeric_cols[numeric_cols %in% names(df_model)]
+
+numeric_vars <- df_model[, numeric_cols]
+
+cor_matrix <- cor(numeric_vars, use = "complete.obs")
+
+round(cor_matrix, 2)
+```
+
+## 15. Correlation heatmap
+
+```{r}
+cor_df <- as.data.frame(as.table(cor_matrix))
+names(cor_df) <- c("variable_1", "variable_2", "correlation")
+
+p9 <- ggplot(cor_df, aes(x = variable_1, y = variable_2, fill = correlation)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "#3B4CC0",
+    mid = "white",
+    high = "#B40426",
+    midpoint = 0
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(
+    title = "Correlation heatmap",
+    x = "",
+    y = ""
+  )
+
+p9
+ggsave("eda_plots/r_correlation_heatmap.png", p9, width = 9, height = 7, dpi = 300)
+```
+
+## 16. K-means clustering for exploratory analysis
+
+```{r}
+set.seed(42)
+
+cluster_data <- df_model[, c("lat", "long", "straight_line_station_km", "log_price")]
+
+cluster_sample <- cluster_data[
+  sample(1:nrow(cluster_data), min(5000, nrow(cluster_data))),
+]
+
+cluster_scaled <- scale(cluster_sample[, c("lat", "long", "straight_line_station_km")])
+```
+
+### 16.1 Elbow method
+
+```{r}
+wcss <- numeric(10)
+
+for (k in 1:10) {
+  set.seed(42)
+  wcss[k] <- kmeans(cluster_scaled, centers = k, nstart = 20)$tot.withinss
+}
+
+elbow_df <- data.frame(
+  clusters = 1:10,
+  wcss = wcss
+)
+
+p10 <- ggplot(elbow_df, aes(x = clusters, y = wcss)) +
+  geom_line(color = "#4C78A8") +
+  geom_point(color = "#F58518", size = 2.5) +
+  labs(
+    title = "Elbow method for k-means",
+    x = "Number of clusters",
+    y = "Within-cluster sum of squares"
+  )
+
+p10
+ggsave("eda_plots/r_kmeans_elbow.png", p10, width = 8, height = 5, dpi = 300)
+```
+
+### 16.2 K-means with 3 clusters
+
+```{r}
+set.seed(42)
+
+kmeans_result <- kmeans(cluster_scaled, centers = 3, nstart = 20)
+
+table(kmeans_result$cluster)
+
+cluster_sample$cluster <- as.factor(kmeans_result$cluster)
+
+p11 <- ggplot(cluster_sample, aes(x = long, y = lat, color = cluster)) +
+  geom_point(alpha = 0.6, size = 1.4) +
+  labs(
+    title = "K-means clusters",
+    x = "Longitude",
+    y = "Latitude",
+    color = "Cluster"
+  )
+
+p11
+ggsave("eda_plots/r_kmeans_clusters.png", p11, width = 8, height = 5, dpi = 300)
+```
+
+### 16.3 Cluster price summary
+
+```{r}
+cluster_summary <- aggregate(
+  log_price ~ cluster,
+  data = cluster_sample,
+  FUN = median
+)
+
+names(cluster_summary) <- c("cluster", "median_log_price")
+
+cluster_summary
+
+write.csv(cluster_summary, "outputs/r_kmeans_cluster_summary.csv", row.names = FALSE)
+```
+
+## 17. Train-test split
+
+```{r}
+set.seed(42)
+
+train_index <- sample(1:nrow(df_model), 0.8 * nrow(df_model))
+
+train_data <- df_model[train_index, ]
+test_data <- df_model[-train_index, ]
+
+cat("Training rows:", nrow(train_data), "\n")
+cat("Testing rows :", nrow(test_data), "\n")
+```
+
+## 18. Decision Tree Regression
+
+```{r}
+predictor_names <- setdiff(names(train_data), c("price", "log_price"))
+
+formula_dt <- as.formula(
+  paste("log_price ~", paste(predictor_names, collapse = " + "))
+)
+
+formula_dt
+```
+
+```{r}
+dt_model <- rpart(
+  formula_dt,
+  data = train_data,
+  method = "anova",
+  control = rpart.control(
+    cp = 0.001,
+    maxdepth = 8,
+    minsplit = 50
+  )
+)
+
+printcp(dt_model)
+```
+
+## 19. Decision Tree plot
+
+```{r}
+png("eda_plots/r_decision_tree_plot.png", width = 1200, height = 800)
+plot(dt_model, uniform = TRUE, margin = 0.1)
+text(dt_model, use.n = TRUE, cex = 0.6)
+dev.off()
+
+plot(dt_model, uniform = TRUE, margin = 0.1)
+text(dt_model, use.n = TRUE, cex = 0.6)
+```
+
+## 20. Predictions
+
+```{r}
+predicted_log <- predict(dt_model, newdata = test_data)
+actual_log <- test_data$log_price
+```
+
+## 21. Evaluation functions
+
+```{r}
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2))
+}
+
+mae <- function(actual, predicted) {
+  mean(abs(actual - predicted))
+}
+
+r2_score <- function(actual, predicted) {
+  1 - sum((actual - predicted)^2) / sum((actual - mean(actual))^2)
+}
+```
+
+## 22. Decision Tree evaluation on log scale
+
+```{r}
+dt_rmse_log <- rmse(actual_log, predicted_log)
+dt_mae_log <- mae(actual_log, predicted_log)
+dt_r2_log <- r2_score(actual_log, predicted_log)
+
+cat("Decision Tree - Log Price Results\n")
+cat("RMSE:", round(dt_rmse_log, 4), "\n")
+cat("MAE :", round(dt_mae_log, 4), "\n")
+cat("R2  :", round(dt_r2_log, 4), "\n")
+```
+
+## 23. Decision Tree evaluation on original price scale
+
+```{r}
+actual_price <- exp(actual_log)
+predicted_price <- exp(predicted_log)
+
+dt_rmse_price <- rmse(actual_price, predicted_price)
+dt_mae_price <- mae(actual_price, predicted_price)
+dt_r2_price <- r2_score(actual_price, predicted_price)
+
+cat("Decision Tree - Price Results\n")
+cat("RMSE:", round(dt_rmse_price, 2), "\n")
+cat("MAE :", round(dt_mae_price, 2), "\n")
+cat("R2  :", round(dt_r2_price, 4), "\n")
+```
+
+## 24. Median baseline model
+
+```{r}
+baseline_log_prediction <- median(train_data$log_price)
+
+baseline_predicted_log <- rep(baseline_log_prediction, length(actual_log))
+
+baseline_rmse_log <- rmse(actual_log, baseline_predicted_log)
+baseline_mae_log <- mae(actual_log, baseline_predicted_log)
+baseline_r2_log <- r2_score(actual_log, baseline_predicted_log)
+
+baseline_actual_price <- exp(actual_log)
+baseline_predicted_price <- exp(baseline_predicted_log)
+
+baseline_rmse_price <- rmse(baseline_actual_price, baseline_predicted_price)
+baseline_mae_price <- mae(baseline_actual_price, baseline_predicted_price)
+baseline_r2_price <- r2_score(baseline_actual_price, baseline_predicted_price)
+
+cat("Median Baseline - Price Results\n")
+cat("RMSE:", round(baseline_rmse_price, 2), "\n")
+cat("MAE :", round(baseline_mae_price, 2), "\n")
+cat("R2  :", round(baseline_r2_price, 4), "\n")
+```
+
+## 25. Actual vs predicted plot
+
+```{r}
+results_df <- data.frame(
+  actual_log = actual_log,
+  predicted_log = predicted_log,
+  actual_price = actual_price,
+  predicted_price = predicted_price,
+  residual = actual_log - predicted_log
+)
+
+set.seed(42)
+plot_results <- results_df[
+  sample(1:nrow(results_df), min(10000, nrow(results_df))),
+]
+
+p12 <- ggplot(plot_results, aes(x = actual_log, y = predicted_log)) +
+  geom_point(alpha = 0.25, color = "#4C78A8") +
+  geom_abline(slope = 1, intercept = 0, color = "#D62728") +
+  labs(
+    title = "Decision Tree: actual vs predicted log price",
+    x = "Actual log price",
+    y = "Predicted log price"
+  )
+
+p12
+ggsave("eda_plots/r_decision_tree_actual_vs_predicted.png", p12, width = 8, height = 5, dpi = 300)
+```
+
+## 26. Residual plot
+
+```{r}
+p13 <- ggplot(plot_results, aes(x = predicted_log, y = residual)) +
+  geom_point(alpha = 0.2, color = "#7A5195") +
+  geom_hline(yintercept = 0, color = "#D62728") +
+  labs(
+    title = "Decision Tree residual plot",
+    x = "Predicted log price",
+    y = "Residual"
+  )
+
+p13
+ggsave("eda_plots/r_decision_tree_residuals.png", p13, width = 8, height = 5, dpi = 300)
+```
+
+## 27. Variable importance
+
+```{r}
+importance_df <- data.frame(
+  feature = names(dt_model$variable.importance),
+  importance = as.numeric(dt_model$variable.importance)
+)
+
+importance_df <- importance_df[order(-importance_df$importance), ]
+
+importance_df
+```
+
+```{r}
+top_importance <- head(importance_df, 15)
+
+p14 <- ggplot(top_importance, aes(x = reorder(feature, importance), y = importance)) +
+  geom_col(fill = "#54A24B") +
+  coord_flip() +
+  labs(
+    title = "Top Decision Tree variables",
+    x = "Feature",
+    y = "Importance"
+  )
+
+p14
+ggsave("eda_plots/r_decision_tree_importance.png", p14, width = 8, height = 5, dpi = 300)
+```
+
+## 28. Save output files
+
+```{r}
+test_predictions <- test_data
+test_predictions$actual_log <- actual_log
+test_predictions$predicted_log <- predicted_log
+test_predictions$actual_price <- actual_price
+test_predictions$predicted_price <- predicted_price
+test_predictions$residual <- actual_log - predicted_log
+
+metrics_df <- data.frame(
+  model = "Decision Tree",
+  rmse_log = dt_rmse_log,
+  mae_log = dt_mae_log,
+  r2_log = dt_r2_log,
+  rmse_price = dt_rmse_price,
+  mae_price = dt_mae_price,
+  r2_price = dt_r2_price
+)
+
+baseline_metrics_df <- data.frame(
+  model = "Median Baseline",
+  rmse_log = baseline_rmse_log,
+  mae_log = baseline_mae_log,
+  r2_log = baseline_r2_log,
+  rmse_price = baseline_rmse_price,
+  mae_price = baseline_mae_price,
+  r2_price = baseline_r2_price
+)
+
+comparison_metrics_df <- rbind(baseline_metrics_df, metrics_df)
+
+write.csv(missing_summary, "outputs/r_missing_summary.csv", row.names = FALSE)
+write.csv(results_df, "outputs/r_decision_tree_predictions.csv", row.names = FALSE)
+write.csv(test_predictions, "outputs/r_decision_tree_test_predictions.csv", row.names = FALSE)
+write.csv(importance_df, "outputs/r_decision_tree_importance.csv", row.names = FALSE)
+write.csv(metrics_df, "outputs/r_decision_tree_metrics.csv", row.names = FALSE)
+write.csv(baseline_metrics_df, "outputs/r_baseline_metrics.csv", row.names = FALSE)
+write.csv(comparison_metrics_df, "outputs/r_model_baseline_comparison.csv", row.names = FALSE)
+
+write.csv(train_data, "outputs/train_data_for_python.csv", row.names = FALSE)
+write.csv(test_data, "outputs/test_data_for_python.csv", row.names = FALSE)
+
+cat("R workflow completed successfully.\n")
+cat("Train/test files exported for Python.\n")
+```

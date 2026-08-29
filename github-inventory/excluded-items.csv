@@ -1,0 +1,5 @@
+"Type","RelativePath","PreparedPath","SizeBytes","Reason"
+"Directory","__pycache__","","","Excluded directory '__pycache__'"
+"Directory","outputs","","","Excluded directory 'outputs'"
+"File","CS5812_STUDENT_ID.pdf","","500413","Excluded identity-bearing binary document for privacy"
+"File","final_london_modelling.csv","","133873597","Excluded because file is larger than 50 MiB GitHub-friendly threshold"
